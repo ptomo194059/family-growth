@@ -3,7 +3,7 @@ import type { Lang } from './types';
 
 /** 多語系字串 */
 export const STR = {
-  title: { zh: '家庭成長任務', en: 'Family Growth Tasks' },
+  title: { zh: 'FamGrow', en: 'FamGrow' },
   version: { zh: 'v1.5 • 中/英切換', en: 'v1.5 • zh/en toggle' },
 
   tabs: {
