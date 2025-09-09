@@ -4,69 +4,95 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-// ===== Types =====
+/** ===== Types ===== */
 type DailyTask = { id: string; title: string; points: number; done: boolean };
 type WeeklyTask = { id: string; title: string; points: number; target: number; count: number };
-type CustomTask = { id: string; title: string; points: number; done: boolean };
 type Child = { id: string; name: string };
 
 // 每日快照（跨日時寫入）
 type DayLog = {
-  dateISO: string;          // e.g. "2025-09-09"
-  stars: number;            // 當日完成的星星（來自 daily+custom）
-  completed: number;        // 當日完成數（daily.done + custom.done）
-  total: number;            // 當日可完成總數（daily.length + custom.length）
+  dateISO: string;   // e.g. "2025-09-09"
+  stars: number;     // 當日完成的星星（daily + weekly 當日貢獻）
+  completed: number; // 當日完成數（daily.done）
+  total: number;     // 當日可完成總數（daily.length）
 };
 
 type StoreState = {
+  /** Core data */
   activeChildId: string;
   children: Child[];
-
   daily: Record<string, DailyTask[]>;
   weekly: Record<string, WeeklyTask[]>;
-  customs: Record<string, CustomTask[]>;
 
-  // resets bookkeeping
-  lastDailyResetISO: string | null;
-  lastWeeklyResetISO: string | null;
+  /** Wallet */
+  balances: Record<string, number>;
 
-  // 歷史記錄（用於 Home 的「最近 7 天」）
-  history: Record<string, DayLog[]>; // key: childId -> 最近 N 天的日誌（保留 60 天）
+  /** Weekly stars contribution for "today" (used by Home history) */
+  todayWeeklyStars: Record<string, number>;
 
-  // actions
+  /** Rewards config（之後可在 Settings 編輯） */
+  dailyFullCompleteReward: Record<string, number>;  // 每日全部完成獎勵 $$
+  weeklyFullCompleteReward: Record<string, number>; // 每週全部達標獎勵 $$
+
+  /** Rewards claim bookkeeping（避免重複發放，且可在同期間撤回） */
+  dailyRewardClaimedToday: Record<string, boolean>;
+  weeklyRewardClaimedThisWeek: Record<string, boolean>;
+  dailyRewardPayoutToday: Record<string, number>;   // 今日實際發放金額（撤回用）
+  weeklyRewardPayoutThisWeek: Record<string, number>;
+
+  /** resets bookkeeping */
+  lastDailyResetISO: string | null;   // e.g. "2025-09-09"
+  lastWeeklyResetISO: string | null;  // 週一 e.g. "2025-09-08"
+
+  /** History for Home chart */
+  history: Record<string, DayLog[]>; // 保留最近 60 天
+
+  /** actions */
   setActiveChild: (id: string) => void;
 
+  // tasks ops
   toggleDaily: (childId: string, id: string) => void;
   incWeekly: (childId: string, id: string) => void;
   decWeekly: (childId: string, id: string) => void;
-  toggleCustom: (childId: string, id: string) => void;
-  addCustom: (childId: string, title: string, points: number) => void;
-  removeCustom: (childId: string, id: string) => void;
 
-  // reset actions
+  // reward setters（供未來 Settings 使用）
+  setDailyReward: (childId: string, amount: number) => void;
+  setWeeklyReward: (childId: string, amount: number) => void;
+
+  // resets
   resetDailyForAllChildren: () => void;
   resetWeeklyForAllChildren: () => void;
-  ensureResetsNow: () => void; // 檢查是否跨日／跨週，需要就重置＋寫入快照
+  ensureResetsNow: () => void; // 啟動/每分鐘檢查，做快照＋重置
 };
 
-// ===== helpers =====
+/** ===== helpers ===== */
 const pad2 = (n: number) => (n < 10 ? `0${n}` : `${n}`);
 const toISODate = (d: Date) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 
 function startOfWeekMonday(d: Date) {
   const day = d.getDay(); // 0=Sun,1=Mon,...6=Sat
-  const diff = (day === 0 ? -6 : 1 - day);
+  const diff = day === 0 ? -6 : 1 - day;
   const res = new Date(d);
   res.setDate(d.getDate() + diff);
   res.setHours(0, 0, 0, 0);
   return res;
 }
-
-function clampHistory(arr: DayLog[], keep = 60): DayLog[] {
-  if (arr.length <= keep) return arr;
-  return arr.slice(arr.length - keep);
+function clampHistory<T>(arr: T[], keep = 60) {
+  return arr.length <= keep ? arr : arr.slice(arr.length - keep);
 }
 
+/** 判斷是否「每日全部完成」 */
+function isDailyFullyCompleted(daily: DailyTask[]) {
+  if (!daily || daily.length === 0) return false;
+  return daily.every((t) => t.done);
+}
+/** 判斷是否「每週全部達標」（全部 weekly.count >= target 且至少有一個任務） */
+function isWeeklyFullyCompleted(weekly: WeeklyTask[]) {
+  if (!weekly || weekly.length === 0) return false;
+  return weekly.every((t) => t.count >= Math.max(1, t.target));
+}
+
+/** ===== store ===== */
 export const useAppStore = create<StoreState>()(
   persist(
     (set, get) => ({
@@ -90,7 +116,19 @@ export const useAppStore = create<StoreState>()(
         ],
         c2: [],
       },
-      customs: { c1: [], c2: [] },
+
+      balances: { c1: 0, c2: 0 },
+
+      todayWeeklyStars: { c1: 0, c2: 0 },
+
+      // 預設獎勵金額（之後可在 Settings 編輯）
+      dailyFullCompleteReward: { c1: 20, c2: 20 },
+      weeklyFullCompleteReward: { c1: 50, c2: 50 },
+
+      dailyRewardClaimedToday: { c1: false, c2: false },
+      weeklyRewardClaimedThisWeek: { c1: false, c2: false },
+      dailyRewardPayoutToday: { c1: 0, c2: 0 },
+      weeklyRewardPayoutThisWeek: { c1: 0, c2: 0 },
 
       lastDailyResetISO: null,
       lastWeeklyResetISO: null,
@@ -101,145 +139,192 @@ export const useAppStore = create<StoreState>()(
       setActiveChild: (id) => set({ activeChildId: id }),
 
       toggleDaily: (childId, id) => {
-        const list = get().daily[childId] ?? [];
-        set({
-          daily: {
-            ...get().daily,
-            [childId]: list.map((t) => (t.id === id ? { ...t, done: !t.done } : t)),
-          },
-        });
+        const s = get();
+        const list = s.daily[childId] ?? [];
+        const updated = list.map((t) => (t.id === id ? { ...t, done: !t.done } : t));
+        set({ daily: { ...s.daily, [childId]: updated } });
+
+        // 檢查是否達「每日全部完成」→ 發/收回 獎勵
+        const nowAll = isDailyFullyCompleted(updated);
+        const claimed = s.dailyRewardClaimedToday[childId] ?? false;
+        const reward = s.dailyFullCompleteReward[childId] ?? 0;
+        const bal = s.balances[childId] ?? 0;
+
+        if (nowAll && !claimed) {
+          // 發放
+          set({
+            balances: { ...s.balances, [childId]: bal + reward },
+            dailyRewardClaimedToday: { ...s.dailyRewardClaimedToday, [childId]: true },
+            dailyRewardPayoutToday: { ...s.dailyRewardPayoutToday, [childId]: reward },
+          });
+        } else if (!nowAll && claimed) {
+          // 撤回
+          const payout = s.dailyRewardPayoutToday[childId] ?? 0;
+          set({
+            balances: { ...s.balances, [childId]: Math.max(0, bal - payout) },
+            dailyRewardClaimedToday: { ...s.dailyRewardClaimedToday, [childId]: false },
+            dailyRewardPayoutToday: { ...s.dailyRewardPayoutToday, [childId]: 0 },
+          });
+        }
       },
 
       incWeekly: (childId, id) => {
-        const list = get().weekly[childId] ?? [];
+        const s = get();
+        const list = s.weekly[childId] ?? [];
+        const updated = list.map((t) => (t.id === id ? { ...t, count: t.count + 1 } : t));
         set({
-          weekly: {
-            ...get().weekly,
-            [childId]: list.map((t) => (t.id === id ? { ...t, count: t.count + 1 } : t)),
+          weekly: { ...s.weekly, [childId]: updated },
+          // 今日 weekly 星星增加（供 Home 圖表使用）
+          todayWeeklyStars: {
+            ...s.todayWeeklyStars,
+            [childId]: (s.todayWeeklyStars[childId] ?? 0) + (list.find((t) => t.id === id)?.points ?? 0),
           },
         });
+
+        // 檢查是否達「每週全部達標」→ 發獎勵（收回邏輯在 decWeekly）
+        const nowAll = isWeeklyFullyCompleted(updated);
+        const claimed = s.weeklyRewardClaimedThisWeek[childId] ?? false;
+        const reward = s.weeklyFullCompleteReward[childId] ?? 0;
+        const bal = s.balances[childId] ?? 0;
+
+        if (nowAll && !claimed) {
+          set({
+            balances: { ...s.balances, [childId]: bal + reward },
+            weeklyRewardClaimedThisWeek: { ...s.weeklyRewardClaimedThisWeek, [childId]: true },
+            weeklyRewardPayoutThisWeek: { ...s.weeklyRewardPayoutThisWeek, [childId]: reward },
+          });
+        }
       },
 
       decWeekly: (childId, id) => {
-        const list = get().weekly[childId] ?? [];
+        const s = get();
+        const list = s.weekly[childId] ?? [];
+        const task = list.find((t) => t.id === id);
+        const updated = list.map((t) => (t.id === id ? { ...t, count: Math.max(0, t.count - 1) } : t));
         set({
-          weekly: {
-            ...get().weekly,
-            [childId]: list.map((t) => (t.id === id ? { ...t, count: Math.max(0, t.count - 1) } : t)),
+          weekly: { ...s.weekly, [childId]: updated },
+          todayWeeklyStars: {
+            ...s.todayWeeklyStars,
+            [childId]: Math.max(0, (s.todayWeeklyStars[childId] ?? 0) - (task?.points ?? 0)),
           },
         });
-      },
 
-      toggleCustom: (childId, id) => {
-        const list = get().customs[childId] ?? [];
-        set({
-          customs: {
-            ...get().customs,
-            [childId]: list.map((t) => (t.id === id ? { ...t, done: !t.done } : t)),
-          },
-        });
-      },
-
-      addCustom: (childId, title, points) => {
-        const list = get().customs[childId] ?? [];
-        set({
-          customs: {
-            ...get().customs,
-            [childId]: [...list, { id: `c${Date.now()}`, title, points, done: false }],
-          },
-        });
-      },
-
-      removeCustom: (childId, id) => {
-        const list = get().customs[childId] ?? [];
-        set({
-          customs: {
-            ...get().customs,
-            [childId]: list.filter((t) => t.id !== id),
-          },
-        });
-      },
-
-      // ===== Reset + Snapshot =====
-      resetDailyForAllChildren: () => {
-        const state = get();
-        const nextDaily: StoreState["daily"] = {};
-        for (const childId of Object.keys(state.daily)) {
-          nextDaily[childId] = (state.daily[childId] ?? []).map((t) => ({ ...t, done: false }));
+        // 若調整後「不再全部達標」且之前已領 → 撤回該週獎勵
+        const nowAll = isWeeklyFullyCompleted(updated);
+        const claimed = s.weeklyRewardClaimedThisWeek[childId] ?? false;
+        if (!nowAll && claimed) {
+          const reward = s.weeklyRewardPayoutThisWeek[childId] ?? 0;
+          const bal = s.balances[childId] ?? 0;
+          set({
+            balances: { ...s.balances, [childId]: Math.max(0, bal - reward) },
+            weeklyRewardClaimedThisWeek: { ...s.weeklyRewardClaimedThisWeek, [childId]: false },
+            weeklyRewardPayoutThisWeek: { ...s.weeklyRewardPayoutThisWeek, [childId]: 0 },
+          });
         }
-        set({ daily: nextDaily, lastDailyResetISO: toISODate(new Date()) });
+      },
+
+      setDailyReward: (childId, amount) =>
+        set((s) => ({
+          dailyFullCompleteReward: { ...s.dailyFullCompleteReward, [childId]: Math.max(0, Math.floor(amount)) },
+        })),
+      setWeeklyReward: (childId, amount) =>
+        set((s) => ({
+          weeklyFullCompleteReward: { ...s.weeklyFullCompleteReward, [childId]: Math.max(0, Math.floor(amount)) },
+        })),
+
+      // ===== Resets（手動）=====
+      resetDailyForAllChildren: () => {
+        const s = get();
+        const nextDaily: StoreState["daily"] = {};
+        for (const childId of Object.keys(s.daily)) {
+          nextDaily[childId] = (s.daily[childId] ?? []).map((t) => ({ ...t, done: false }));
+        }
+        set({
+          daily: nextDaily,
+          todayWeeklyStars: Object.fromEntries(Object.keys(s.todayWeeklyStars).map((k) => [k, 0])),
+          dailyRewardClaimedToday: Object.fromEntries(Object.keys(s.dailyRewardClaimedToday).map((k) => [k, false])),
+          dailyRewardPayoutToday: Object.fromEntries(Object.keys(s.dailyRewardPayoutToday).map((k) => [k, 0])),
+          lastDailyResetISO: toISODate(new Date()),
+        });
       },
 
       resetWeeklyForAllChildren: () => {
-        const state = get();
+        const s = get();
         const nextWeekly: StoreState["weekly"] = {};
-        for (const childId of Object.keys(state.weekly)) {
-          nextWeekly[childId] = (state.weekly[childId] ?? []).map((t) => ({ ...t, count: 0 }));
+        for (const childId of Object.keys(s.weekly)) {
+          nextWeekly[childId] = (s.weekly[childId] ?? []).map((t) => ({ ...t, count: 0 }));
         }
         const monday = startOfWeekMonday(new Date());
-        set({ weekly: nextWeekly, lastWeeklyResetISO: toISODate(monday) });
+        set({
+          weekly: nextWeekly,
+          weeklyRewardClaimedThisWeek: Object.fromEntries(Object.keys(s.weeklyRewardClaimedThisWeek).map((k) => [k, false])),
+          weeklyRewardPayoutThisWeek: Object.fromEntries(Object.keys(s.weeklyRewardPayoutThisWeek).map((k) => [k, 0])),
+          lastWeeklyResetISO: toISODate(monday),
+        });
       },
 
+      // ===== ensureResetsNow（啟動/每分鐘由 AppBoot 呼叫）=====
       ensureResetsNow: () => {
-        const state = get();
+        const s = get();
         const now = new Date();
         const todayISO = toISODate(now);
 
         // === Daily snapshot & reset ===
-        if (state.lastDailyResetISO !== todayISO) {
-          // 決定要寫入快照的日期：若已經有 lastDailyResetISO，則以它為「昨天」
-          // 若為首次啟動（null），就不寫入快照，直接初始化為今天。
-          if (state.lastDailyResetISO) {
-            const snapshotDateISO = state.lastDailyResetISO;
+        if (s.lastDailyResetISO !== todayISO) {
+          if (s.lastDailyResetISO) {
+            const snapshotDateISO = s.lastDailyResetISO;
 
-            const nextHistory: StoreState["history"] = { ...state.history };
-            for (const child of state.children) {
-              const dList = state.daily[child.id] ?? [];
-              const cList = state.customs[child.id] ?? [];
+            const nextHistory: StoreState["history"] = { ...s.history };
+            for (const child of s.children) {
+              const dList = s.daily[child.id] ?? [];
+              const weeklyStars = s.todayWeeklyStars[child.id] ?? 0;
 
               const completedDaily = dList.filter((t) => t.done);
-              const completedCustom = cList.filter((t) => t.done);
 
               const stars =
-                completedDaily.reduce((s, t) => s + t.points, 0) +
-                completedCustom.reduce((s, t) => s + t.points, 0);
-              const completed = completedDaily.length + completedCustom.length;
-              const total = dList.length + cList.length;
+                completedDaily.reduce((sum, t) => sum + t.points, 0) +
+                weeklyStars;
 
-              const log: DayLog = {
-                dateISO: snapshotDateISO,
-                stars,
-                completed,
-                total,
-              };
+              const completed = completedDaily.length;
+              const total = dList.length;
 
+              const log: DayLog = { dateISO: snapshotDateISO, stars, completed, total };
               const prev = nextHistory[child.id] ?? [];
               nextHistory[child.id] = clampHistory([...prev, log], 60);
             }
-
-            // 先寫入 history，再清空 daily.done
             set({ history: nextHistory });
           }
 
-          // 清空 daily.done，並更新 lastDailyResetISO 為今天
+          // 清空當日：daily.done、todayWeeklyStars、每日獎勵旗標/金額
           const nextDaily: StoreState["daily"] = {};
-          for (const childId of Object.keys(state.daily)) {
-            nextDaily[childId] = (state.daily[childId] ?? []).map((t) => ({ ...t, done: false }));
+          for (const childId of Object.keys(s.daily)) {
+            nextDaily[childId] = (s.daily[childId] ?? []).map((t) => ({ ...t, done: false }));
           }
-          set({ daily: nextDaily, lastDailyResetISO: todayISO });
+          set({
+            daily: nextDaily,
+            todayWeeklyStars: Object.fromEntries(Object.keys(s.todayWeeklyStars).map((k) => [k, 0])),
+            dailyRewardClaimedToday: Object.fromEntries(Object.keys(s.dailyRewardClaimedToday).map((k) => [k, false])),
+            dailyRewardPayoutToday: Object.fromEntries(Object.keys(s.dailyRewardPayoutToday).map((k) => [k, 0])),
+            lastDailyResetISO: todayISO,
+          });
         }
 
         // === Weekly reset on Monday ===
         const thisMondayISO = toISODate(startOfWeekMonday(now));
-        if (state.lastWeeklyResetISO !== thisMondayISO) {
+        if (s.lastWeeklyResetISO !== thisMondayISO) {
           const nextWeekly: StoreState["weekly"] = {};
-          for (const childId of Object.keys(state.weekly)) {
-            nextWeekly[childId] = (state.weekly[childId] ?? []).map((t) => ({ ...t, count: 0 }));
+          for (const childId of Object.keys(s.weekly)) {
+            nextWeekly[childId] = (s.weekly[childId] ?? []).map((t) => ({ ...t, count: 0 }));
           }
-          set({ weekly: nextWeekly, lastWeeklyResetISO: thisMondayISO });
+          set({
+            weekly: nextWeekly,
+            weeklyRewardClaimedThisWeek: Object.fromEntries(Object.keys(s.weeklyRewardClaimedThisWeek).map((k) => [k, false])),
+            weeklyRewardPayoutThisWeek: Object.fromEntries(Object.keys(s.weeklyRewardPayoutThisWeek).map((k) => [k, 0])),
+            lastWeeklyResetISO: thisMondayISO,
+          });
         }
       },
     }),
-    { name: "famgrow-store" } // localStorage key
+    { name: "famgrow-store" }
   )
 );
