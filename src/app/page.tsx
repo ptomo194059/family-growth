@@ -1,130 +1,176 @@
 "use client";
 
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  CartesianGrid,
-} from "recharts";
-import { Star, Wallet, ShoppingCart, Flame } from "lucide-react";
+import { useEffect, useMemo } from "react";
+import { Coins, Star, CalendarDays, TrendingUp, Wallet } from "lucide-react";
 import { useAppStore } from "@/lib/store";
-import { useMemo } from "react";
+import dynamic from "next/dynamic";
+
+// Recharts 動態載入（避免 SSR）
+const ResponsiveContainer = dynamic(() => import("recharts").then(m => m.ResponsiveContainer), { ssr: false });
+const BarChart = dynamic(() => import("recharts").then(m => m.BarChart), { ssr: false });
+const Bar = dynamic(() => import("recharts").then(m => m.Bar), { ssr: false });
+const XAxis = dynamic(() => import("recharts").then(m => m.XAxis), { ssr: false });
+const YAxis = dynamic(() => import("recharts").then(m => m.YAxis), { ssr: false });
+const Tooltip = dynamic(() => import("recharts").then(m => m.Tooltip), { ssr: false });
+const CartesianGrid = dynamic(() => import("recharts").then(m => m.CartesianGrid), { ssr: false });
 
 const pad2 = (n: number) => (n < 10 ? `0${n}` : `${n}`);
 const toISODate = (d: Date) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+const toYearMonth = (d: Date) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
 
 export default function HomePage() {
   const childId = useAppStore((s) => s.activeChildId);
-  const daily = useAppStore((s) => s.daily[childId] ?? []);
-  const history = useAppStore((s) => s.history[childId] ?? []);
-  const todayWeeklyStars = useAppStore((s) => s.todayWeeklyStars[childId] ?? 0);
-  const balance = useAppStore((s) => s.balances[childId] ?? 0);
+  const ensureResetsNow = useAppStore((s) => s.ensureResetsNow);
 
-  // 今日星星（daily + weekly 今日貢獻）
+  const balance = useAppStore((s) => s.balances[childId] ?? 0);
+  const starWallet = useAppStore((s) => s.starWallet?.[childId] ?? 0);
+  const daily = useAppStore((s) => s.daily[childId] ?? []);
+  const todayWeeklyStars = useAppStore((s) => s.todayWeeklyStars[childId] ?? 0);
+  const history = useAppStore((s) => s.history[childId] ?? []);
+  const monthSpentMap = useAppStore((s) => s.monthSpent[childId] ?? {});
+
+  useEffect(() => {
+    ensureResetsNow();
+  }, [ensureResetsNow]);
+
+  // 今日星星（daily 完成 + weekly 今日）
   const todayStars = useMemo(() => {
-    const dailyEarned = daily.filter((t) => t.done).reduce((s, t) => s + t.points, 0);
-    return dailyEarned + todayWeeklyStars;
+    const dailyStars = daily.filter((t) => t.done).reduce((sum, t) => sum + t.points, 0);
+    return dailyStars + todayWeeklyStars;
   }, [daily, todayWeeklyStars]);
 
-  // （暫時）本月已花，可之後放入 store 與交易紀錄
-  const spentThisMonth = 0;
-
-  // 最近 7 天資料（含今天）
-  const today = new Date();
-  const last7Data = useMemo(() => {
-    const map = new Map(history.map((h) => [h.dateISO, h.stars]));
-    return Array.from({ length: 7 }, (_, i) => {
-      const d = new Date(today);
-      d.setDate(today.getDate() - (6 - i));
-      const iso = toISODate(d);
-      const label = `${d.getMonth() + 1}/${d.getDate()}`;
-      const stars = iso === toISODate(today) ? todayStars : map.get(iso) ?? 0;
-      return { date: label, stars };
-    });
-  }, [history, todayStars]);
-
-  // 連續達標天數（stars > 0）
+  // 連續達標天數（stars>0）
   const streak = useMemo(() => {
-    let count = 0;
+    const today = new Date();
     const todayISO = toISODate(today);
-    const allLogs = [
-      ...history.map((h) => ({ dateISO: h.dateISO, stars: h.stars })),
-      { dateISO: todayISO, stars: todayStars },
+    const logs = [
+      ...history,
+      { dateISO: todayISO, stars: todayStars, completed: 0, total: 0 },
     ];
-    const logMap = new Map(allLogs.map((h) => [h.dateISO, h.stars]));
+    const map = new Map(logs.map((l) => [l.dateISO, l.stars]));
+    let count = 0;
     for (let i = 0; i < 60; i++) {
       const d = new Date(today);
       d.setDate(today.getDate() - i);
       const iso = toISODate(d);
-      const stars = logMap.get(iso) ?? 0;
-      if (stars > 0) count++;
+      const s = map.get(iso) ?? 0;
+      if (s > 0) count++;
       else break;
     }
     return count;
   }, [history, todayStars]);
 
-  const maxStars = Math.max(5, ...last7Data.map((d) => d.stars));
+  // 最近 7 天資料（含今天，自動偵測日期）
+  const chartData = useMemo(() => {
+    const map = new Map(history.map((h) => [h.dateISO, h.stars]));
+    const out: { date: string; stars: number }[] = [];
+    const today = new Date();
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(today);
+      d.setDate(today.getDate() - i);
+      const key = toISODate(d);
+      const label = `${pad2(d.getMonth() + 1)}/${pad2(d.getDate())}`;
+      const stars = (i === 0 ? todayStars : (map.get(key) ?? 0));
+      out.push({ date: label, stars });
+    }
+    return out;
+  }, [history, todayStars]);
+
+  // 本月已花（以抽卡與用錢購買為主）
+  const ym = toYearMonth(new Date());
+  const monthSpent = monthSpentMap[ym] ?? 0;
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">🏠 Home Dashboard</h1>
+      <h1 className="text-2xl font-bold">🏠 Home</h1>
 
-      {/* 四個統計卡片 */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        {/* 今日星星 */}
-        <div className="p-4 bg-white rounded-2xl shadow flex flex-col items-start">
-          <div className="flex items-center gap-2 text-yellow-500 mb-2">
-            <Star size={20} />
-            <p className="text-sm text-gray-500">今日星星</p>
+      {/* Top cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-4">
+        {/* 星星（今日） */}
+        <div className="p-4 bg-white rounded-2xl shadow flex items-center gap-3">
+          <div className="p-2 rounded-xl bg-yellow-50">
+            <Star className="text-yellow-600" />
           </div>
-          <p className="text-2xl font-bold text-yellow-500">{todayStars}</p>
+          <div>
+            <div className="text-sm text-gray-500">今日星星</div>
+            <div className="text-xl font-semibold">{todayStars}</div>
+          </div>
         </div>
 
-        {/* 餘額（來自 store.balances） */}
-        <div className="p-4 bg-white rounded-2xl shadow flex flex-col items-start">
-          <div className="flex items-center gap-2 text-green-600 mb-2">
-            <Wallet size={20} />
-            <p className="text-sm text-gray-500">餘額</p>
+        {/* 星星錢包（可消耗） */}
+        <div className="p-4 bg-white rounded-2xl shadow flex items-center gap-3">
+          <div className="p-2 rounded-xl bg-amber-50">
+            <Star className="text-amber-600" />
           </div>
-          <p className="text-2xl font-bold text-green-600">${balance}</p>
+          <div>
+            <div className="text-sm text-gray-500">星星錢包</div>
+            <div className="text-xl font-semibold">{starWallet} ⭐</div>
+            <div className="text-[11px] text-gray-400">可在 Shop 兌換或換現金</div>
+          </div>
         </div>
 
-        {/* 本月已花（暫置 0） */}
-        <div className="p-4 bg-white rounded-2xl shadow flex flex-col items-start">
-          <div className="flex items-center gap-2 text-red-500 mb-2">
-            <ShoppingCart size={20} />
-            <p className="text-sm text-gray-500">本月已花</p>
+        {/* 餘額 */}
+        <div className="p-4 bg-white rounded-2xl shadow flex items-center gap-3">
+          <div className="p-2 rounded-xl bg-emerald-50">
+            <Wallet className="text-emerald-600" />
           </div>
-          <p className="text-2xl font-bold text-red-500">${spentThisMonth}</p>
+          <div>
+            <div className="text-sm text-gray-500">餘額</div>
+            <div className="text-xl font-semibold">${balance}</div>
+          </div>
+        </div>
+
+        {/* 本月已花 */}
+        <div className="p-4 bg-white rounded-2xl shadow flex items-center gap-3">
+          <div className="p-2 rounded-xl bg-rose-50">
+            <Coins className="text-rose-600" />
+          </div>
+          <div>
+            <div className="text-sm text-gray-500">本月已花</div>
+            <div className="text-xl font-semibold">${monthSpent}</div>
+            <div className="text-[11px] text-gray-400">含抽卡與用錢購買</div>
+          </div>
         </div>
 
         {/* 連續達標天數 */}
-        <div className="p-4 bg-white rounded-2xl shadow flex flex-col items-start">
-          <div className="flex items-center gap-2 text-blue-600 mb-2">
-            <Flame size={20} />
-            <p className="text-sm text-gray-500">連續達標天數</p>
+        <div className="p-4 bg-white rounded-2xl shadow flex items-center gap-3">
+          <div className="p-2 rounded-xl bg-blue-50">
+            <CalendarDays className="text-blue-600" />
           </div>
-          <p className="text-2xl font-bold text-blue-600">{streak}</p>
+          <div>
+            <div className="text-sm text-gray-500">連續達標天數</div>
+            <div className="text-xl font-semibold">{streak} 天</div>
+          </div>
+        </div>
+
+        {/* 最近 7 天總星星（小統計） */}
+        <div className="p-4 bg-white rounded-2xl shadow flex items-center gap-3">
+          <div className="p-2 rounded-xl bg-gray-50">
+            <TrendingUp className="text-gray-600" />
+          </div>
+          <div>
+            <div className="text-sm text-gray-500">最近 7 天星星</div>
+            <div className="text-xl font-semibold">
+              {chartData.reduce((s, d) => s + d.stars, 0)}
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* 最近 7 天紀錄（星星數 長條圖） */}
+      {/* Chart */}
       <div className="p-4 bg-white rounded-2xl shadow">
-        <p className="text-sm text-gray-500 mb-2">最近 7 天星星數</p>
-        <div className="h-44">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-semibold">最近 7 天完成紀錄</h2>
+          <div className="text-xs text-gray-500">（自動依日期偵測）</div>
+        </div>
+        <div className="h-60">
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={last7Data}>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} />
+            <BarChart data={chartData}>
+              <CartesianGrid vertical={false} strokeDasharray="3 3" />
               <XAxis dataKey="date" />
-              <YAxis domain={[0, maxStars]} allowDecimals={false} />
-              <Tooltip
-                formatter={(value) => [`${value} ★`, "星星"]}
-                labelFormatter={(label) => `日期：${label}`}
-              />
-              <Bar dataKey="stars" fill="#d1d5db" radius={[6, 6, 0, 0]} />
+              <YAxis allowDecimals={false} />
+              <Tooltip />
+              <Bar dataKey="stars" radius={[6, 6, 0, 0]} fill="#E5E7EB" /> {/* 淡灰色 */}
             </BarChart>
           </ResponsiveContainer>
         </div>
