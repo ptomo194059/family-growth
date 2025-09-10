@@ -41,7 +41,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
          * - 80px 為目前 Header 估計高度（原本 pt-20 = 5rem = 80px）
          * - 若你的 Header 實際高度不同，改動 80px 即可
          */}
-        <main className="mx-auto max-w-7xl px-4 md:px-6 pt-[calc(80px+env(safe-area-inset-top))] md:pt-24">
+        <main className="mx-auto max-w-7xl px-4 md:px-6 pt-[calc(96px+env(safe-area-inset-top))] md:pt-24">
           {children}
         </main>
       </body>
