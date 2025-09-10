@@ -23,6 +23,7 @@ import {
   Wand2,
 } from "lucide-react";
 import type { MoneyItem, StarItem } from "@/lib/shop.config";
+import BackupSection from "@/components/settings/BackupSection";
 
 function uid(prefix: string) {
   return `${prefix}-${Math.random().toString(36).slice(2, 8)}-${Date.now()
@@ -136,7 +137,7 @@ export default function SettingsPage() {
     rewardPool.map((c) => ({ ...c }))
   );
 
-  /** ====== when switching child in UI ====== */
+  /** ====== keep local in sync when switching child or store changed ====== */
   const syncFromChild = (childId: string) => {
     const c = children.find((x) => x.id === childId);
     setLocalChildId(childId);
@@ -147,6 +148,13 @@ export default function SettingsPage() {
     setLocalWeeklyReward(weeklyReward[childId] ?? 50);
     setLocalDrawCost(drawCost[childId] ?? 20);
   };
+
+  useEffect(() => {
+    if (!children.length) return;
+    const cid = activeChildId || children[0].id;
+    syncFromChild(cid);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeChildId, children]);
 
   /** ====== children ops ====== */
   const onAddChild = () => {
@@ -171,8 +179,11 @@ export default function SettingsPage() {
     )
       return;
     removeChild(selectedChild.id);
-    const next = useAppStore.getState().activeChildId;
-    syncFromChild(next);
+    // 等 store 更新 activeChildId 後再同步
+    setTimeout(() => {
+      const next = useAppStore.getState().activeChildId;
+      if (next) syncFromChild(next);
+    }, 0);
   };
 
   /** ====== task list editors ====== */
@@ -400,6 +411,9 @@ export default function SettingsPage() {
           * 變更後本視窗不會立刻鎖定；重新整理或下次進入會要求新 PIN。
         </div>
       </div>
+
+      {/* 資料備份／匯入還原 */}
+      <BackupSection />
 
       {/* 小孩設定 */}
       <div className="p-4 bg-white rounded-2xl shadow space-y-3">
@@ -933,7 +947,7 @@ export default function SettingsPage() {
                       onClick={() =>
                         setStarItems((prev) => prev.filter((x) => x.id !== it.id))
                       }
-                      className="h-9 w-9 rounded-lg bg-rose-50 text-rose-600 inline-flex items-center justify中心"
+                      className="h-9 w-9 rounded-lg bg-rose-50 text-rose-600 inline-flex items-center justify-center"
                     >
                       <Trash2 size={16} />
                     </button>

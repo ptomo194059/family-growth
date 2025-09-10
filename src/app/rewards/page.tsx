@@ -1,16 +1,20 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useCallback } from "react";
 import { Gift, Sparkles, Coins, Trophy, RefreshCw, CheckCircle2, Circle, X } from "lucide-react";
 import { useAppStore, RewardCard, Rarity, Achievement } from "@/lib/store";
 import { motion, AnimatePresence } from "framer-motion";
 
 function rarityColor(r: Rarity) {
   switch (r) {
-    case "SSR": return "from-yellow-400 via-pink-400 to-purple-500";
-    case "SR": return "from-purple-400 to-blue-400";
-    case "R": return "from-emerald-400 to-teal-400";
-    default: return "from-gray-200 to-gray-300";
+    case "SSR":
+      return "from-yellow-400 via-pink-400 to-purple-500";
+    case "SR":
+      return "from-purple-400 to-blue-400";
+    case "R":
+      return "from-emerald-400 to-teal-400";
+    default:
+      return "from-gray-200 to-gray-300";
   }
 }
 function rarityLabel(r: Rarity) {
@@ -29,7 +33,9 @@ export default function RewardsPage() {
   const badges = useAppStore((s) => s.badges[childId] ?? []);
   const drawCard = useAppStore((s) => s.drawCard);
   const setDrawCost = useAppStore((s) => s.setDrawCost);
-  const useInventoryCard = useAppStore((s) => s.useInventoryCard);
+
+  // 🚫 避免以 use 開頭：改名避免被 ESLint 當作 Hook
+  const consumeInventoryCard = useAppStore((s) => s.useInventoryCard);
 
   const achievements = useAppStore((s) => s.achievementsConfig);
   const history = useAppStore((s) => s.history[childId] ?? []);
@@ -38,7 +44,7 @@ export default function RewardsPage() {
   const totalCompleted = useAppStore((s) => s.statsChoresCompleted[childId] ?? 0);
 
   // 語系偵測（default zh）
-  const lang = typeof document !== "undefined" ? (document.documentElement.lang || "zh") : "zh";
+  const lang = typeof document !== "undefined" ? document.documentElement.lang || "zh" : "zh";
   const t = <T extends { zh: string; en: string }>(obj: T) => (lang.startsWith("zh") ? obj.zh : obj.en);
 
   // 機率（依權重計算比例）
@@ -65,7 +71,7 @@ export default function RewardsPage() {
 
   const canDraw = balance >= drawCost && !rolling;
 
-  const onDraw = async () => {
+  const onDraw = useCallback(async () => {
     if (!canDraw) return;
     setResult(null);
     setRolling(true);
@@ -79,7 +85,7 @@ export default function RewardsPage() {
     setResult(card);
     await new Promise((r) => setTimeout(r, 600));
     setRolling(false);
-  };
+  }, [canDraw, drawCard, childId]);
 
   const invCount = useMemo(() => {
     const count = new Map<string, number>();
@@ -100,17 +106,20 @@ export default function RewardsPage() {
 
   const streak = useMemo(() => {
     const today = new Date();
-    const todayISO = `${today.getFullYear()}-${(today.getMonth()+1).toString().padStart(2,"0")}-${today.getDate().toString().padStart(2,"0")}`;
-    const logs = [
-      ...history,
-      { dateISO: todayISO, stars: todayStars, completed: 0, total: 0 },
-    ];
+    const todayISO = `${today.getFullYear()}-${(today.getMonth() + 1).toString().padStart(2, "0")}-${today
+      .getDate()
+      .toString()
+      .padStart(2, "0")}`;
+    const logs = [...history, { dateISO: todayISO, stars: todayStars, completed: 0, total: 0 }];
     const map = new Map(logs.map((l) => [l.dateISO, l.stars]));
     let count = 0;
     for (let i = 0; i < 60; i++) {
       const d = new Date(today);
       d.setDate(today.getDate() - i);
-      const iso = `${d.getFullYear()}-${(d.getMonth()+1).toString().padStart(2,"0")}-${d.getDate().toString().padStart(2,"0")}`;
+      const iso = `${d.getFullYear()}-${(d.getMonth() + 1).toString().padStart(2, "0")}-${d
+        .getDate()
+        .toString()
+        .padStart(2, "0")}`;
       const s = map.get(iso) ?? 0;
       if (s > 0) count++;
       else break;
@@ -136,10 +145,13 @@ export default function RewardsPage() {
   // 單一成就的進度
   const achievementProgress = (a: Achievement) => {
     const value =
-      a.metric === "totalCompleted" ? totalCompleted :
-      a.metric === "streak" ? streak :
-      a.metric === "stars" ? starsTotal :
-      balance;
+      a.metric === "totalCompleted"
+        ? totalCompleted
+        : a.metric === "streak"
+        ? streak
+        : a.metric === "stars"
+        ? starsTotal
+        : balance;
     const pct = Math.max(0, Math.min(100, Math.round((value / a.target) * 100)));
     const badgeId = `achv-${a.id}`;
     const owned = badges.some((b) => b.id === badgeId);
@@ -150,14 +162,13 @@ export default function RewardsPage() {
   // 取得卡池項目 by id（顯示名稱與稀有度）
   const getCard = (id: string | null) => (id ? pool.find((c) => c.id === id) || null : null);
 
-  // 確認使用
-  const confirmUse = () => {
+  // ✅ 確認使用（不再呼叫以 use 開頭的函式名，避免 hooks 規則）
+  const confirmUse = useCallback(() => {
     if (!useCardId) return;
-    const ok = useInventoryCard(childId, useCardId);
+    consumeInventoryCard(childId, useCardId);
     setUseOpen(false);
     setUseCardId(null);
-    // 若需要回饋，可在此加上 toast；目前簡化為直接關閉
-  };
+  }, [consumeInventoryCard, childId, useCardId]);
 
   return (
     <div className="space-y-6">
@@ -246,7 +257,9 @@ export default function RewardsPage() {
                       initial={{ scale: 0.8, opacity: 0 }}
                       animate={{ scale: 1, opacity: 1 }}
                       exit={{ opacity: 0 }}
-                      className={`relative w-64 h-40 rounded-xl bg-gradient-to-br ${rarityColor(result.rarity)} flex flex-col items-center justify-center text-white`}
+                      className={`relative w-64 h-40 rounded-xl bg-gradient-to-br ${rarityColor(
+                        result.rarity,
+                      )} flex flex-col items-center justify-center text-white`}
                     >
                       <div className="absolute -top-3 right-3 bg-white/20 px-2 py-0.5 rounded-full text-xs font-semibold">
                         {rarityLabel(result.rarity)}
@@ -269,23 +282,20 @@ export default function RewardsPage() {
                 <button
                   onClick={onDraw}
                   disabled={!canDraw}
-                  className={`h-11 px-5 rounded-xl inline-flex items-center gap-2 ${canDraw ? "bg-blue-500 text-white" : "bg-gray-200 text-gray-400 cursor-not-allowed"}`}
+                  className={`h-11 px-5 rounded-xl inline-flex items-center gap-2 ${
+                    canDraw ? "bg-blue-500 text-white" : "bg-gray-200 text-gray-400 cursor-not-allowed"
+                  }`}
                 >
                   <Gift size={18} />
                   抽卡（${drawCost}）
                 </button>
-                <button
-                  onClick={() => setResult(null)}
-                  className="h-11 px-4 rounded-xl bg-white border inline-flex items-center gap-2"
-                >
+                <button onClick={() => setResult(null)} className="h-11 px-4 rounded-xl bg-white border inline-flex items-center gap-2">
                   <RefreshCw size={16} />
                   重置展示
                 </button>
               </div>
 
-              {balance < drawCost && (
-                <p className="mt-2 text-center text-xs text-red-600">餘額不足，無法抽卡</p>
-              )}
+              {balance < drawCost && <p className="mt-2 text-center text-xs text-red-600">餘額不足，無法抽卡</p>}
             </div>
           </div>
 
@@ -307,10 +317,7 @@ export default function RewardsPage() {
             <h3 className="text-sm font-semibold mt-4 mb-2">卡池一覽</h3>
             <div className="grid grid-cols-2 gap-2">
               {sortedPool.map((c) => (
-                <div
-                  key={c.id}
-                  className={`rounded-lg p-3 text-sm bg-gradient-to-br ${rarityColor(c.rarity)} text-white`}
-                >
+                <div key={c.id} className={`rounded-lg p-3 text-sm bg-gradient-to-br ${rarityColor(c.rarity)} text-white`}>
                   <div className="flex items-center justify-between">
                     <span className="font-semibold">{c.name}</span>
                     <span className="text-xs opacity-80">{rarityLabel(c.rarity)}</span>
@@ -334,8 +341,13 @@ export default function RewardsPage() {
                   return (
                     <button
                       key={c.id}
-                      onClick={() => { setUseCardId(c.id); setUseOpen(true); }}
-                      className={`text-left rounded-lg p-3 bg-gradient-to-br ${rarityColor(c.rarity)} text-white focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-900`}
+                      onClick={() => {
+                        setUseCardId(c.id);
+                        setUseOpen(true);
+                      }}
+                      className={`text-left rounded-lg p-3 bg-gradient-to-br ${rarityColor(
+                        c.rarity,
+                      )} text-white focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-900`}
                     >
                       <div className="flex items-center justify-between">
                         <span className="font-semibold text-sm">{c.name}</span>
@@ -375,9 +387,7 @@ export default function RewardsPage() {
                       <div className="text-3xl">{b.icon ?? "🏅"}</div>
                       <div className="mt-1 text-sm font-semibold">{b.title}</div>
                       {b.description && <div className="text-xs text-gray-500 mt-0.5">{b.description}</div>}
-                      <div className="text-[10px] text-gray-400 mt-1">
-                        {new Date(b.earnedAt).toLocaleString()}
-                      </div>
+                      <div className="text-[10px] text-gray-400 mt-1">{new Date(b.earnedAt).toLocaleString()}</div>
                     </div>
                   ))}
               </div>
@@ -402,13 +412,19 @@ export default function RewardsPage() {
                             <span className="text-xl">{a.icon ?? "🧹"}</span>
                             <div className="text-sm font-semibold">{t(a.title)}</div>
                           </div>
-                          {p.achieved ? <CheckCircle2 className="text-green-600" size={18} /> : <Circle className="text-gray-300" size={18} />}
+                          {p.achieved ? (
+                            <CheckCircle2 className="text-green-600" size={18} />
+                          ) : (
+                            <Circle className="text-gray-300" size={18} />
+                          )}
                         </div>
                         <div className="text-xs text-gray-500 mt-1">{t(a.desc)}</div>
                         <div className="mt-2 h-2 w-full rounded-full bg-white overflow-hidden">
                           <div className="h-full bg-blue-500" style={{ width: `${p.pct}%` }} />
                         </div>
-                        <div className="mt-1 text-xs text-gray-500">進度：<span className="tabular-nums">{p.value}</span> / {a.target}</div>
+                        <div className="mt-1 text-xs text-gray-500">
+                          進度：<span className="tabular-nums">{p.value}</span> / {a.target}
+                        </div>
                       </div>
                     );
                   })}
@@ -428,13 +444,19 @@ export default function RewardsPage() {
                             <span className="text-xl">{a.icon ?? "🔥"}</span>
                             <div className="text-sm font-semibold">{t(a.title)}</div>
                           </div>
-                          {p.achieved ? <CheckCircle2 className="text-green-600" size={18} /> : <Circle className="text-gray-300" size={18} />}
+                          {p.achieved ? (
+                            <CheckCircle2 className="text-green-600" size={18} />
+                          ) : (
+                            <Circle className="text-gray-300" size={18} />
+                          )}
                         </div>
                         <div className="text-xs text-gray-500 mt-1">{t(a.desc)}</div>
                         <div className="mt-2 h-2 w-full rounded-full bg-white overflow-hidden">
                           <div className="h-full bg-orange-500" style={{ width: `${p.pct}%` }} />
                         </div>
-                        <div className="mt-1 text-xs text-gray-500">進度：<span className="tabular-nums">{p.value}</span> / {a.target}</div>
+                        <div className="mt-1 text-xs text-gray-500">
+                          進度：<span className="tabular-nums">{p.value}</span> / {a.target}
+                        </div>
                       </div>
                     );
                   })}
@@ -454,13 +476,19 @@ export default function RewardsPage() {
                             <span className="text-xl">{a.icon ?? "⭐"}</span>
                             <div className="text-sm font-semibold">{t(a.title)}</div>
                           </div>
-                          {p.achieved ? <CheckCircle2 className="text-green-600" size={18} /> : <Circle className="text-gray-300" size={18} />}
+                          {p.achieved ? (
+                            <CheckCircle2 className="text-green-600" size={18} />
+                          ) : (
+                            <Circle className="text-gray-300" size={18} />
+                          )}
                         </div>
                         <div className="text-xs text-gray-500 mt-1">{t(a.desc)}</div>
                         <div className="mt-2 h-2 w-full rounded-full bg-white overflow-hidden">
                           <div className="h-full bg-violet-500" style={{ width: `${p.pct}%` }} />
                         </div>
-                        <div className="mt-1 text-xs text-gray-500">進度：<span className="tabular-nums">{p.value}</span> / {a.target}</div>
+                        <div className="mt-1 text-xs text-gray-500">
+                          進度：<span className="tabular-nums">{p.value}</span> / {a.target}
+                        </div>
                       </div>
                     );
                   })}
@@ -480,19 +508,24 @@ export default function RewardsPage() {
                             <span className="text-xl">{a.icon ?? "💰"}</span>
                             <div className="text-sm font-semibold">{t(a.title)}</div>
                           </div>
-                          {p.achieved ? <CheckCircle2 className="text-green-600" size={18} /> : <Circle className="text-gray-300" size={18} />}
+                          {p.achieved ? (
+                            <CheckCircle2 className="text-green-600" size={18} />
+                          ) : (
+                            <Circle className="text-gray-300" size={18} />
+                          )}
                         </div>
                         <div className="text-xs text-gray-500 mt-1">{t(a.desc)}</div>
                         <div className="mt-2 h-2 w-full rounded-full bg-white overflow-hidden">
                           <div className="h-full bg-emerald-500" style={{ width: `${p.pct}%` }} />
                         </div>
-                        <div className="mt-1 text-xs text-gray-500">進度：$<span className="tabular-nums">{p.value}</span> / {a.target}</div>
+                        <div className="mt-1 text-xs text-gray-500">
+                          進度：$<span className="tabular-nums">{p.value}</span> / {a.target}
+                        </div>
                       </div>
                     );
                   })}
                 </div>
               </div>
-
             </div>
           </div>
         </div>
@@ -523,7 +556,7 @@ export default function RewardsPage() {
 
               {(() => {
                 const card = getCard(useCardId);
-                const count = useCardId ? (invCount.get(useCardId) ?? 0) : 0;
+                const count = useCardId ? invCount.get(useCardId) ?? 0 : 0;
                 if (!card || count <= 0) {
                   return <p className="mt-3 text-sm text-gray-500">找不到卡片或數量不足。</p>;
                 }
@@ -543,16 +576,10 @@ export default function RewardsPage() {
                     </p>
 
                     <div className="mt-4 flex items-center justify-end gap-2">
-                      <button
-                        onClick={() => setUseOpen(false)}
-                        className="h-10 px-4 rounded-xl bg-gray-100"
-                      >
+                      <button onClick={() => setUseOpen(false)} className="h-10 px-4 rounded-xl bg-gray-100">
                         取消
                       </button>
-                      <button
-                        onClick={confirmUse}
-                        className="h-10 px-4 rounded-xl bg-gray-900 text-white"
-                      >
+                      <button onClick={confirmUse} className="h-10 px-4 rounded-xl bg-gray-900 text-white">
                         使用
                       </button>
                     </div>
@@ -564,9 +591,7 @@ export default function RewardsPage() {
         )}
       </AnimatePresence>
 
-      <p className="text-xs text-gray-500">
-        ※ 點擊背包卡片即可「使用」並扣除數量；當數量為 0 時，該卡片會自動從背包列表消失。
-      </p>
+      <p className="text-xs text-gray-500">※ 點擊背包卡片即可「使用」並扣除數量；當數量為 0 時，該卡片會自動從背包列表消失。</p>
     </div>
   );
 }
